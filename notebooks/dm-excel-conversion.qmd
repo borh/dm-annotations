@@ -1,0 +1,78 @@
+---
+title: Discourse Marker Conversion
+jupyter: devenv-dm-annotations
+---
+
+```{python}
+from pandas.io.formats.printing import justify
+from pandas.io.formats.style import non_reducing_slice
+from dm_annotations.corpus import *
+
+import pandas as pd
+import polars as pl
+
+df = read_annotations_excel()
+assert len(df) > 0
+df
+```
+
+```{python}
+df.columns
+```
+
+<!--
+['節の名称', '文段番号', '文番号', 'segment数', 'テクスト単位（文単位）', 'Segment文章', '文構造',
+ '文段・意味', '叙述範囲', '主題の展開', 'テクスト単位；語連鎖　lexical　bundle', '非５２３項m九',
+ '語連鎖：接続表現', '語連鎖：文末表現', '基本形', '文末表現意味機能分類', '備考', 'N=新情報', 'T=主題、']
+-->
+
+```{python}
+df.groupby("節の名称").count()
+df["テクスト単位（文単位）"]
+
+
+# c_name, p_id, s_id, segment_num, text, segment_text, structure, p_meaning, _叙述範囲, _主題の展開, 
+
+import re
+
+# P_RX = re.compile(r"S0*(?P<sentence>\d{1,3})-?(?P<segment>\d)?")
+P_RX = re.compile(r"S0*(?P<sentence>\d{1,3})")
+DM_FRAGMENT = r"(\w+)\([\)]+\)"
+DM_RX = re.compile(rf"(\[?(((\w+)\([^\)]+\))+?)\]?)+?")
+
+print(DM_RX)
+
+from collections import defaultdict
+h = defaultdict(list)
+
+sentence, segment = None, None
+for r in df.itertuples(name="Row"):
+    rid = str(r[4])
+    dm_pattern = str(r[8])
+    print(rid, "="*20, dm_pattern, DM_RX.match(dm_pattern))
+
+    if match := P_RX.match(rid):
+        # new_sentence, new_segment = match.group("sentence"), match.group("segment")
+        new_sentence = match.group("sentence")
+        new_sentence = int(new_sentence)
+
+        if new_sentence != sentence:
+            sentence = new_sentence
+            segment = 1
+        else:
+            segment += 1
+    else:
+        print(f"adding segment {segment}")
+        # Same sentence, new segment
+        if segment:
+            segment += 1
+        else:
+            segment = 1
+        
+    print("->", sentence, segment)
+    h[sentence].append((r[7], r[8]))
+
+
+h
+```
+

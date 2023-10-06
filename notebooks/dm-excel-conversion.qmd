@@ -4,8 +4,6 @@ jupyter: devenv-dm-annotations
 ---
 
 ```{python}
-from pandas.io.formats.printing import justify
-from pandas.io.formats.style import non_reducing_slice
 from dm_annotations.corpus import *
 
 import pandas as pd

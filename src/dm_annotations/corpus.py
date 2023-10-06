@@ -1,6 +1,6 @@
 import spacy
 from spacy import displacy
-from .matcher import modality_match, connectives_match
+from dm_annotations.matcher import modality_match, connectives_match
 from pathlib import Path
 import re
 import unicodedata

@@ -30,4 +30,5 @@ def test_connectives_patterns(nlp):
 
 
 def test_connectives_regexes(nlp):
+    # TODO
     assert len(connectives_regexes) == 489

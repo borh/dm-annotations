@@ -16,7 +16,6 @@ try:
 except NameError:
     module_dir = Path(".").parent
 
-
 project_root = module_dir.parent.parent
 
 with open(project_root / "resources/modality-patterns.json") as f:
@@ -392,7 +391,9 @@ modality_patterns_2 = {
     "とされている": {
         "category": [],
         "examples": ["有効な方法とされている"],
-        "pattern": v(m(ORTH="と"), m(ORTH="さ"), m(NORM="れる"), VERB_TE, m(NORM="居る")),
+        "pattern": v(
+            m(ORTH="と"), m(ORTH="さ"), m(NORM="れる"), VERB_TE, m(NORM="居る")
+        ),
     },
     "のではないだろうか": {
         "category": [],
@@ -437,7 +438,9 @@ modality_patterns_2 = {
     "といわれている": {
         "category": [],
         "examples": ["有効な方法と言われている"],
-        "pattern": v(m(ORTH="と"), m(NORM="言う"), m(NORM="れる"), VERB_TE, m(NORM="居る")),
+        "pattern": v(
+            m(ORTH="と"), m(NORM="言う"), m(NORM="れる"), VERB_TE, m(NORM="居る")
+        ),
     },
     "ざるをえない": {
         "category": [],

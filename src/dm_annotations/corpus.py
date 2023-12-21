@@ -188,6 +188,7 @@ def read_annotations_excel(path, model="ja_core_news_sm"):
         doc._.title = title
         add_regex_span(doc, r["connective"], "con", key="connective")
         add_regex_span(doc, r["modality"], "mod", key="modality")
+
         if modality_matches := modality_match(doc, nlp, modality_matcher):
             add_annotations(doc, modality_matches, key="modality")
         if connectives_matches := connectives_match(doc, nlp, connectives_matcher):
@@ -219,6 +220,7 @@ def merge_contiguous_spans(doc, spans):
             merged_spans.append(span)
         else:
             # Extend the last merged span to include the current span.
+
             merged_spans[-1] = Span(
                 doc, merged_spans[-1].start, span.end, label=span.label_
             )

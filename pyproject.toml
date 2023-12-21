@@ -9,25 +9,36 @@ packages = [{include = "dm_annotations", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-prodigy = { file = "wheels/prodigy-1.14.3-cp311-cp311-linux_x86_64.whl" }
+prodigy = { file = "wheels/prodigy-1.14.12-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 pandas = "^2.0.3"
 polars = "^0.18.6"
 openpyxl = "^3.1.2"
 ipykernel = "^6.24.0"
 pyarrow = "^12.0.1"
-spacy-transformers = "^1.2.2"
-torch = {version = "^2.0.1+cpu", source = "pytorch-cpu"}
-ja_core_news_sm = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.6.0/ja_core_news_sm-3.6.0-py3-none-any.whl"}
-ja_core_news_trf = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.6.1/ja_core_news_trf-3.6.1-py3-none-any.whl"}
-ginza = "^5.1.3"
-ja-ginza-bert-large = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.1.3/ja_ginza_bert_large-5.1.3b1-py3-none-any.whl" }
+# spacy-transformers = "^1.2.2"
+torch = "^2.1.0" # {version = "^2.1.0+cpu", source = "pytorch-cpu"}
 lmql = "^0.7b3"
 networkx = "^3.1"
 matplotlib = "^3.7.3"
-dspy-ai = "^2.0.4"
+dspy-ai = "^2.0.8"
+openai = "^0.28.1"
+
+# [tool.poetry.group.spacy.dependencies]
+ja_core_news_sm = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.6.0/ja_core_news_sm-3.6.0-py3-none-any.whl"}
+ja_core_news_trf = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.6.1/ja_core_news_trf-3.6.1-py3-none-any.whl"}
+pygraphviz = "^1.11"
+cupy-cuda12x = "^12.2.0"
+jaconv = "^0.3.4"
+pyrsistent = "^0.20.0"
+
+[tool.poetry.group.ginza.dependencies]
+ginza = "^5.1.3"
+ja-ginza = "^5.1.3"
+ja-ginza-bert-large = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.1.3/ja_ginza_bert_large-5.1.3b1-py3-none-any.whl" }
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
+pytest-xdist = "^3.5.0"
 pytest = "^7.4.2"
 pytest-watcher = "^0.3.4"
 pytest-testmon = "^1.2.2"
@@ -38,7 +49,7 @@ addopts = "-ra -q"
 testpaths = [
     "tests",
 ]
-filterwarnings = ["ignore:.*(FutureWarning|DeprecationWarning)"]
+filterwarnings = ["ignore:.*(FutureWarning|DeprecationWarning|PydanticDeprecatedSince)"]
 
 
 [[tool.poetry.source]]
@@ -46,9 +57,14 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
 
+# [[tool.poetry.source]]
+# name = "pytorch-cuda"
+# url = "https://download.pytorch.org/whl/cu118"
+# priority = "explicit"
+
 [[tool.poetry.source]]
-name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu118"
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm5.6"
 priority = "explicit"
 
 [build-system]

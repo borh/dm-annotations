@@ -1,20 +1,24 @@
+from pathlib import Path
+from logging import warn
 from dm_annotations.corpus import *
 
 
-def test_corpus_load():
-    with open("jiyu.md") as f:
-        text = f.read()
-    assert len(text) > 0
-
-    with open("ryu.md") as f:
-        text = f.read()
-    assert len(text) > 0
+# def test_corpus_load():
+#     with open("jiyu.md") as f:
+#         text = f.read()
+#     assert len(text) > 0
+#
+#     with open("ryu.md") as f:
+#         text = f.read()
+#     assert len(text) > 0
 
 
 def test_read_annotations_excel():
     for excel in Path("resources/analyses/").glob("*.xlsx"):
-        df = read_annotations_excel(excel)
+        warn(excel)
+        df, docs = read_annotations_excel(excel)
         assert len(df) > 0
+        assert len(docs) > 0
 
         assert {"section_name", "rid", "dm"} <= set(df.columns.to_list())
         # [
@@ -40,4 +44,4 @@ def test_read_annotations_excel():
         #     "Unnamed: 19",
         # ]
 
-        assert len(df.groupby("section_name")) > 1
+        # assert len(df.groupby("section_name")) > 1

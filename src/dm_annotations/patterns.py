@@ -122,12 +122,14 @@ ARIMASEN = s(
     ),
 )
 
+DEARU = v(m(ORTH="で"), ARU)
+
 DA = s(
     v(
         m(ORTH=m(IN=v("だ", "です", "でし", "だっ")), NORM=m(NOT_IN=v("た"))),
         m(ORTH="た", OP="?"),
     ),
-    v(m(ORTH="で"), ARU),
+    DEARU,
 )
 
 DEWA = s(v(m(ORTH="で"), m(ORTH="は")), v(m(ORTH="じゃ")))

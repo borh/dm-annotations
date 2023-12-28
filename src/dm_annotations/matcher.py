@@ -1,9 +1,8 @@
 import re
-import spacy
 from spacy.tokens import Doc, Span
 from spacy.matcher import Matcher
-from spacy.util import filter_spans
 from spacy.language import Language
+from spacy.util import filter_spans
 from .patterns import (
     modality_patterns,
     connectives_patterns,
@@ -24,24 +23,20 @@ if not Span.has_extension("modality"):
 
 
 def create_matcher(
-    patterns_dict: dict[str, list], model="ja_ginza", nlp=None
+    patterns_dict: dict[str, list], nlp: Language
 ) -> tuple[Language, Matcher]:
-    if not nlp:
-        nlp = spacy.load(model)
-
-    matcher = Matcher(nlp.vocab)
+    matcher = Matcher(nlp.vocab, validate=True)
 
     for pattern_name, pattern in patterns_dict.items():
         matcher.add(pattern_name, pattern)
 
+    assert len(matcher) > 0
+
     return nlp, matcher
 
 
-def create_connectives_matcher(model="ja_ginza", nlp=None) -> tuple[Language, Matcher]:
-    if not nlp:
-        nlp = spacy.load(model)
-
-    connectives_matcher = Matcher(nlp.vocab)
+def create_connectives_matcher(nlp: Language) -> tuple[Language, Matcher]:
+    connectives_matcher = Matcher(nlp.vocab, validate=True)
 
     for pattern in connectives_patterns:
         connectives_matcher.add(pattern["conjunction"], pattern["pattern"])
@@ -49,22 +44,26 @@ def create_connectives_matcher(model="ja_ginza", nlp=None) -> tuple[Language, Ma
     return nlp, connectives_matcher
 
 
-def create_modality_matcher(model="ja_ginza", nlp=None) -> tuple[Language, Matcher]:
-    return create_matcher(modality_patterns, model, nlp)
+def create_modality_matcher(nlp: Language) -> tuple[Language, Matcher]:
+    return create_matcher(modality_patterns, nlp)
 
 
-def modality_match(doc: Doc, nlp, modality_matcher):
+def modality_match(doc: Doc, nlp: Language, modality_matcher: Matcher) -> list[Span]:
+    """Returns all modality matches for input sentence."""
     matches = modality_matcher(doc)
     spans = [
         Span(doc, start, end, nlp.vocab.strings[match_id])
         for match_id, start, end in matches
-        if start >= len(doc) - 10  # FIXME only look at 10 last tokens
+        # if start >= len(doc) - 10  # FIXME only look at 10 last tokens
     ]
     spans = filter_spans(spans)
     return spans
 
 
-def connectives_match(doc: Doc, nlp, connectives_matcher):
+def connectives_match(
+    doc: Doc, nlp: Language, connectives_matcher: Matcher
+) -> list[Span]:
+    # TODO match all, but keep index of match for later filtering?
     matches = connectives_matcher(doc)
     spans = [
         Span(doc, start, end, nlp.vocab.strings[match_id])

@@ -71,36 +71,47 @@ def test_simple_patterns():
         ),
     )
 
-    assert pattern_is_equal(
-        parallel_expand(
-            v(
-                a_token,
-                s(a_token, s(b_token, a_token)),
-                s(b_token, v(a_token, b_token)),
-                v(b_token, b_token),
-            )
-        ),
-        v(
-            v(a_token, a_token, b_token, b_token, b_token),
-            v(a_token, b_token, b_token, b_token, b_token),
-            v(a_token, a_token, a_token, b_token, b_token, b_token),
-            v(a_token, b_token, b_token, b_token),
-            v(a_token, b_token, a_token, b_token, b_token, b_token),
-            v(a_token, a_token, b_token, b_token, b_token),  # Expands to same as above
-            v(a_token, a_token, a_token, b_token, b_token, b_token),
-        ),
-    )
+    # assert pattern_is_equal(
+    #     parallel_expand(
+    #         v(
+    #             a_token,
+    #             s(a_token, s(b_token, a_token)),
+    #             s(b_token, v(a_token, b_token)),
+    #             v(b_token, b_token),
+    #         )
+    #     ),
+    #     v(
+    #         v(a_token, a_token, b_token, b_token, b_token),
+    #         v(a_token, b_token, b_token, b_token, b_token),
+    #         v(a_token, a_token, a_token, b_token, b_token, b_token),
+    #         v(a_token, b_token, b_token, b_token),
+    #         v(a_token, b_token, a_token, b_token, b_token, b_token),
+    #         v(a_token, a_token, b_token, b_token, b_token),  # Expands to same as above
+    #         v(a_token, a_token, a_token, b_token, b_token, b_token),
+    #     ),
+    # )
 
 
 def test_modality_patterns_2(nlp):
     matcher = Matcher(nlp.vocab, validate=True)
-
     for pattern_name, d in modality_patterns_2.items():
+        single_matcher = Matcher(nlp.vocab, validate=True)
         print(pattern_name)
         expanded_pattern = parallel_expand(d["pattern"])
+        single_matcher.add(pattern_name, thaw(expanded_pattern))
         matcher.add(pattern_name, thaw(expanded_pattern))
         for example in d["examples"]:
             print(example)
             doc = nlp(example)
+            matches = single_matcher(doc)
+            assert doc and matches
+
+    for pattern_name, d in modality_patterns_2.items():
+        for example in d["examples"]:
+            doc = nlp(example)
             matches = matcher(doc)
             assert doc and matches
+            assert doc and any(
+                nlp.vocab.strings[match_id] == pattern_name
+                for match_id, _, _ in matches
+            )

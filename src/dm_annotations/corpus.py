@@ -13,9 +13,7 @@ from pathlib import Path
 import logging
 import re
 import json
-import unicodedata
 import pandas as pd
-import polars as pl
 import numpy as np
 import jaconv
 
@@ -63,7 +61,7 @@ def add_annotations(doc, spans, key="sc"):
             doc.spans[key] = spans
 
 
-def add_regex_span(doc, regex, label, key="sc", reverse_find=False):
+def add_regex_span(doc, regex, label, key="sc", meidai=False, reverse_find=False):
     if not isinstance(regex, str):
         return None
     regex = re.sub(r"[／（）。．？]", "", regex)
@@ -87,7 +85,7 @@ def add_regex_span(doc, regex, label, key="sc", reverse_find=False):
     logging.error(f"'{regex}' not found in '{doc}'!")
 
 
-def read_annotations_excel(path, model="ja_core_news_sm"):
+def read_annotations_excel(path, model="ja_ginza"):
     df = pd.read_excel(
         path,
     )
@@ -108,19 +106,20 @@ def read_annotations_excel(path, model="ja_core_news_sm"):
         7: "dm",
         8: "connective",
         9: "known_connective",
-        10: "connective_meidai",
+        10: "connective_meidai_check",
         11: "connective_info",
         12: "modality",
         13: "modality_normal_form",
         14: "modality_bunrui",
-        15: "modality_meidai",
+        15: "modality_meidai_check",
         16: "modality_info",
     }
     df.columns = [rename_dict.get(i, col) for i, col in enumerate(df.columns)]
 
-    bool_map = {1: True, 0: False, "": np.nan}
-    df["connective_meidai"] = df["connective_meidai"].map(bool_map)
-    df["modality_meidai"] = df["modality_meidai"].map(bool_map)
+    bool_map = {1: True, 0: False, "": np.nan, "1": True, "0": False}
+    # False (0): Inside meidai, True(1): Outside meidai
+    df["connective_meidai_check"] = df["connective_meidai_check"].map(bool_map)
+    df["modality_meidai_check"] = df["modality_meidai_check"].map(bool_map)
     df["dm"] = df["dm"].map(str)
     df["rid"] = df["rid"].map(str).map(lambda s: jaconv.z2h(s, ascii=True, digit=True))
     # df = df.map(
@@ -186,8 +185,16 @@ def read_annotations_excel(path, model="ja_core_news_sm"):
         doc._.sentence_id = sentence_id
         doc._.segment_id = segment
         doc._.title = title
-        add_regex_span(doc, r["connective"], "con", key="connective")
-        add_regex_span(doc, r["modality"], "mod", key="modality")
+        add_regex_span(
+            doc,
+            r["connective"],
+            "con",
+            key="connective",
+            meidai=r["connective_meidai_check"],
+        )
+        add_regex_span(
+            doc, r["modality"], "mod", key="modality", meidai=r["modality_meidai_check"]
+        )
 
         if modality_matches := modality_match(doc, nlp, modality_matcher):
             add_annotations(doc, modality_matches, key="modality")

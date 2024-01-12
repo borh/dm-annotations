@@ -1,15 +1,24 @@
+from itertools import permutations
+
+from ginza import force_using_normalized_form_as_lemma
+from pyrsistent import m, pvector, s, thaw, v
 import pytest
-from dm_annotations.patterns import (
-    modality_patterns,
-    modality_patterns_2,
-    connectives_patterns,
-    connectives_regexes,
-    parallel_expand,
-)
 import spacy
 from spacy.matcher import Matcher
-from pyrsistent import v, m, s, pvector, thaw
-from itertools import permutations
+
+from dm_annotations.patterns import (
+    connectives_patterns,
+    connectives_regexes,
+    modality_patterns,
+    modality_patterns_2,
+    parallel_expand,
+    sf_definitions,
+    sf_patterns,
+    split_defs,
+)
+from dm_annotations.matcher import filter_overlaps
+
+# force_using_normalized_form_as_lemma(True)
 
 
 @pytest.fixture
@@ -33,9 +42,26 @@ def test_connectives_patterns(nlp):
         matcher.add(pattern["conjunction"], pattern["pattern"])
 
 
-def test_connectives_regexes(nlp):
-    # TODO
+def test_connectives_regexes():
     assert len(connectives_regexes) == 489
+
+
+def test_classifications():
+    assert split_defs("このころ（この頃）、このごろ（この頃）") == {
+        "このころ",
+        "このごろ",
+        "この頃",
+        "このころ（この頃）",
+        "このごろ（この頃）",
+        "この頃、このごろ",
+    }
+    assert split_defs("そのあと、そのご（その後）") == {
+        "そのあと",
+        "そのご",
+        "そのご（その後）",
+        "そのあと、そのご",
+        "その後",
+    }
 
 
 def pattern_is_equal(a, b):
@@ -104,7 +130,7 @@ def test_modality_patterns_2(nlp):
             print(example)
             doc = nlp(example)
             matches = single_matcher(doc)
-            assert doc and matches
+            assert [(t.norm_, t.lemma_, t.pos_) for t in doc] and matches
 
     for pattern_name, d in modality_patterns_2.items():
         for example in d["examples"]:
@@ -115,3 +141,55 @@ def test_modality_patterns_2(nlp):
                 nlp.vocab.strings[match_id] == pattern_name
                 for match_id, _, _ in matches
             )
+
+
+def test_sf_patterns(nlp):
+    # 大分類
+    assert (
+        len(set(p["category"][0] for _, p in sf_definitions.items())) == 11
+    )  # NOTE: 10 + NA
+    # 再分類
+    assert len(set(p["category"][1] for _, p in sf_definitions.items())) == 40
+    # パターン数
+    assert len(sf_definitions) == 105
+
+    matcher = Matcher(nlp.vocab, validate=True)
+    for pattern_name, d in sf_patterns.items():
+        single_matcher = Matcher(nlp.vocab, validate=True)
+        single_matcher.add(pattern_name, d["pattern"])
+        matcher.add(pattern_name, d["pattern"])
+        for example in d["examples"]:
+            doc = nlp(example)
+            matches = single_matcher(doc)
+            if not matches:
+                print(doc, matches)
+            assert [
+                (t.norm_, t.lemma_, t.pos_, t.tag_, t.morph) for t in doc
+            ] and matches
+        for example in d.get("negative_examples", []):
+            doc = nlp(example)
+            matches = single_matcher(doc)
+            if matches:
+                print(doc, matches)
+            assert [(t.norm_, t.lemma_, t.pos_) for t in doc] and not matches
+
+    # Use full matcher
+    for pattern_name, d in sf_patterns.items():
+        for example in d["examples"]:
+            doc = nlp(example)
+            matches = matcher(doc)
+            print(
+                [nlp.vocab.strings[match_id] for match_id, _, _ in matches],
+            )
+            matches = filter_overlaps(matches)
+            print(
+                example,
+                pattern_name,
+                [nlp.vocab.strings[match_id] for match_id, _, _ in matches],
+            )
+            assert doc and matches
+            assert doc and any(
+                nlp.vocab.strings[match_id] == pattern_name
+                for match_id, _, _ in matches
+            )
+            assert doc and len(matches) == 1  # This is the only match.

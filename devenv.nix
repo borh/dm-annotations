@@ -86,6 +86,9 @@ in
       # pip install prodigy -f https://$LICENSE@download.prodi.gy
     '';
 
+    env.SPACY_MODEL = "ja_ginza";
+    # env.SPACY_MODEL = "ja_core_news_sm";
+
     # https://devenv.sh/languages/
     languages.python = {
       enable = true;
@@ -112,9 +115,6 @@ in
         ++ lib.optionals rocm [
           libdrm
           rocm-all
-          # rocmPackages.meta.rocm-ml-sdk
-          # rocmPackages.meta.rocm-developer-tools
-          # rocmPackages.meta.rocm-hip-libraries
         ]
         ++ lib.optionals cuda [
           cuda-native-redist

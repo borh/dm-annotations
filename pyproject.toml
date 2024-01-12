@@ -30,6 +30,15 @@ ja_core_news_trf = {url = "https://github.com/explosion/spacy-models/releases/do
 cupy-cuda12x = "^12.2.0"
 jaconv = "^0.3.4"
 pyrsistent = "^0.20.0"
+orjson = "^3.9.10"
+xxhash = "^3.4.1"
+marimo = "^0.1.68"
+memory-profiler = "^0.61.0"
+netgraph = "^4.13.2"
+python-louvain = "^0.16"
+altair = "^5.2.0"
+vegafusion = {extras = ["embed"], version = "^1.6.1"}
+statsmodels = "^0.14.1"
 
 [tool.poetry.group.ginza.dependencies]
 ginza = "^5.1.3"

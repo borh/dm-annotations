@@ -1,42 +1,30 @@
 from pathlib import Path
 from logging import warn
-from dm_annotations.corpus import read_annotations_excel
+import spacy
+from dm_annotations.corpus import parse_or_get_docs, extract_dm
 
 
-def test_read_annotations_excel():
-    for excel in Path("resources/analyses/").glob("*.xlsx"):
-        print(excel)
-        warn(excel)
-        df, docs = read_annotations_excel(excel)
-        assert len(df) > 0
-        assert len(docs) > 0
+def test_parse_or_get_docs(model):
+    path = Path("resources/test.jsonl")
+    nlp = spacy.load(model)
+    docs = parse_or_get_docs(path, nlp, batch_size=1)
+    assert docs
 
-        print(df["connective_meidai_check"].count())
-        print(df["modality_meidai_check"].count())
+    assert_docs = list(
+        nlp.pipe(
+            [
+                "この世に及んで、「魅力」は概念として随分語られてきたでしょう。",
+                "魅力は学術的な観点から1890年代を持って大きく研究されるようになった．",
+                "その成果として，「魅力の効果」が解明に寄与したことがいえるであろう．",
+            ]
+        )
+    )
+    # Test initial load and cache:
+    assert [doc.text for doc in docs] == [doc.text for doc in assert_docs]
+    # Test cached results:
+    docs = list(parse_or_get_docs(path, nlp, batch_size=1))
+    assert [doc.text for doc in docs] == [doc.text for doc in assert_docs]
 
-        assert {"section_name", "rid", "dm"} <= set(df.columns.to_list())
-
-    # [
-    #     "項目番号",
-    #     "章節の名称",
-    #     "文段番号",
-    #     "文番号",
-    #     "segment数",
-    #     "テクスト単位（文単位）",
-    #     "Segment別テキスト（下線部は命題）",
-    #     "文構造",
-    #     "文段番号.1",
-    #     "文番号.1",
-    #     "文頭句",
-    #     "接続表現",
-    #     "命題内(0)か外(1)か",
-    #     "備考",
-    #     "語連鎖：文末表現（紫）",
-    #     "文末表現意味機能分類",
-    #     "備考１(定義）",
-    #     "備考２（構文構造の説明）",
-    #     "Unnamed: 18",
-    #     "Unnamed: 19",
-    # ]
-
-    # assert len(df.groupby("section_name")) > 1
+    dms = list(extract_dm(docs, nlp))
+    print(docs, dms)
+    assert len(list(matches for matches in dms if matches)) > 0

@@ -515,3 +515,14 @@ wheels/
 .devenv*
 .direnv
 .envrc
+/*.xlsx
+/*.csv
+/*.jsonl
+/*.png
+/*.svg
+/*.html
+/*.tex
+/*.pdf
+/*.net
+/mprof*
+/cache*

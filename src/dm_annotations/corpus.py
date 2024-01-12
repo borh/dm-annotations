@@ -1,409 +1,311 @@
-from pandas.io.formats.style import non_reducing_slice
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+import gc
+from io import BufferedReader
+from itertools import islice
+import os
+from pathlib import Path
+
+import orjson
+import pandas as pd
 import spacy
-from spacy import displacy
-from spacy.tokens import Doc, Span, SpanGroup
+from spacy.language import Language
+from spacy.tokens import Doc, DocBin
+from tqdm import tqdm
+import xxhash
 
 from dm_annotations.matcher import (
-    modality_match,
     connectives_match,
-    create_modality_matcher,
     create_connectives_matcher,
+    create_sf_matcher,
+    pattern_match,
 )
-from pathlib import Path
-import logging
-import re
-import json
-import pandas as pd
-import numpy as np
-import jaconv
+from dm_annotations.patterns import connectives_classifications, sf_classifications
 
 
-from prodigy.components.db import connect
-from prodigy import set_hashes
-
-if not Doc.has_extension("section_name"):
-    Doc.set_extension("section_name", default=None)
-
-if not Doc.has_extension("title"):
-    Doc.set_extension("title", default=None)
-
-if not Doc.has_extension("sentence_id"):
-    Doc.set_extension("sentence_id", default=None)
-
-if not Doc.has_extension("segment_id"):
-    Doc.set_extension("segment_id", default=None)
-
-
-def normalize_nfkc(s):
-    if isinstance(s, str):
-        return jaconv.h2z(
-            jaconv.normalize(s.replace(" ", ""), "NFKC"),
-            digit=False,
-            ascii=True,
-            kana=True,
-        ).rstrip("　")
-    return s
-
-
-def add_annotation(doc, span, key="sc"):
-    if span is not None:
-        if key in doc.spans:
-            doc.spans[key] += [span]
-        else:
-            doc.spans[key] = [span]
-
-
-def add_annotations(doc, spans, key="sc"):
-    if spans is not None:
-        if key in doc.spans:
-            doc.spans[key].extend(spans)
-        else:
-            doc.spans[key] = spans
-
-
-def add_regex_span(doc, regex, label, key="sc", meidai=False, reverse_find=False):
-    if not isinstance(regex, str):
-        return None
-    regex = re.sub(r"[／（）。．？]", "", regex)
-    if not regex:
-        return None
-    try:
-        if regex[-1] == "，" or regex[-1] == "、":
-            regex = regex[:-1]
-        rx = re.compile(regex)
-    except re.error as e:
-        logging.error(f"'{regex}' not valid regex: {e}")
-        return None
-    matches = list(rx.finditer(doc.text))
-    if reverse_find:
-        matches = matches[::-1]
-    for match in matches:
-        start, end = match.span()
-        span = doc.char_span(start, end, label=label)
-        add_annotation(doc, span, key=key)
-        return None  # Only look at start/end (reverse_find) of segment
-    logging.error(f"'{regex}' not found in '{doc}'!")
-
-
-def read_annotations_excel(path, model="ja_ginza"):
-    df = pd.read_excel(
-        path,
-    )
-    # Apply NFKC normalization on string columns
-    string_columns = df.select_dtypes(include=["object"]).columns
-    df[string_columns] = df[string_columns].map(normalize_nfkc)
-
-    # 項目番号	節の名称	文段番号章‗節＿段（７章）	文番号(186)題目含む	segment数（221）	テクスト単位（文単位）(15882文字）	segment文章（アンダーラインは命題部分）	文構造	文頭句	接続表現（５２３項目含まれる１　外０）	命題の内外（外１/内０）	備考	文末表現	基本形	文末表現意味機能分類（現表にない場合は０）	命題の内か外か	備考
-
-    rename_dict = {
-        0: "_",
-        1: "section_name",
-        2: "page_index",
-        3: "rid",
-        4: "segments",
-        5: "sentence",
-        6: "segment",
-        7: "dm",
-        8: "connective",
-        9: "known_connective",
-        10: "connective_meidai_check",
-        11: "connective_info",
-        12: "modality",
-        13: "modality_normal_form",
-        14: "modality_bunrui",
-        15: "modality_meidai_check",
-        16: "modality_info",
-    }
-    df.columns = [rename_dict.get(i, col) for i, col in enumerate(df.columns)]
-
-    bool_map = {1: True, 0: False, "": np.nan, "1": True, "0": False}
-    # False (0): Inside meidai, True(1): Outside meidai
-    df["connective_meidai_check"] = df["connective_meidai_check"].map(bool_map)
-    df["modality_meidai_check"] = df["modality_meidai_check"].map(bool_map)
-    df["dm"] = df["dm"].map(str)
-    df["rid"] = df["rid"].map(str).map(lambda s: jaconv.z2h(s, ascii=True, digit=True))
-    # df = df.map(
-    #     lambda s: jaconv.h2z(
-    #         jaconv.normalize(s, "NFKC"), digit=False, ascii=True, kana=True
-    #     )
-    #     if isinstance(s, str)
-    #     else s,
-    #     na_action="ignore",
-    # )
-    df.fillna("", inplace=True)
-    df["segment"] = df["segment"].apply(normalize_nfkc)
-    df["sentence"] = df["sentence"].apply(normalize_nfkc)
-    df["connective"] = df["connective"].apply(normalize_nfkc)
-    df["modality"] = df["modality"].apply(normalize_nfkc)
-
-    nlp = spacy.load(model)
-    nlp, modality_matcher = create_modality_matcher(nlp=nlp)
-    nlp, connectives_matcher = create_connectives_matcher(nlp=nlp)
-    P_RX = re.compile(r"S0*(?P<sentence>\d{1,3})")
-    DM_FRAGMENT = r"(\w+)\([\)]+\)"
-    DM_RX = re.compile(rf"(\[?(((\w+)\([^\)]+\))+?)\]?)+?")
-
-    docs = []
-    sentence_id, segment, section_name, title = None, -1, None, None
-    for r in df.to_dict("records"):
-        rid = r["rid"]
-        dm_pattern = r["dm"]
-        new_section_name = r["section_name"]
-        if new_section_name:
-            section_name = new_section_name
-        if title:
-            pass
-        elif section_name == "タイトル":
-            title = r["sentence"]
-        elif r["segments"] == "タイトル" and r["sentence"]:
-            title = r["sentence"]
-        # print(rid, "=" * 20, dm_pattern, DM_RX.match(dm_pattern), section_name)
-
-        if match := P_RX.match(rid):
-            new_sentence_id = int(match.group("sentence"))
-
-            if new_sentence_id != sentence_id:
-                sentence_id = new_sentence_id
-                segment = 1
-            else:
-                segment += 1
-        else:
-            # Same sentence_id, new segment
-            if segment:
-                segment += 1
-            else:
-                segment = 1
-
-        if r["segment"]:
-            doc = nlp(r["segment"].rstrip())
-        elif r["sentence"]:
-            doc = nlp(r["sentence"].rstrip())
-        else:
-            continue
-
-        doc._.section_name = section_name
-        doc._.sentence_id = sentence_id
-        doc._.segment_id = segment
-        doc._.title = title
-        add_regex_span(
-            doc,
-            r["connective"],
-            "con",
-            key="connective",
-            meidai=r["connective_meidai_check"],
-        )
-        add_regex_span(
-            doc, r["modality"], "mod", key="modality", meidai=r["modality_meidai_check"]
-        )
-
-        if modality_matches := modality_match(doc, nlp, modality_matcher):
-            add_annotations(doc, modality_matches, key="modality")
-        if connectives_matches := connectives_match(doc, nlp, connectives_matcher):
-            add_annotations(doc, connectives_matches, key="connective")
-        segment_span = Span(doc, 0, len(doc), label=f"{sentence_id}_segment_{segment}")
-        add_annotation(doc, segment_span, key="segment")
-        add_annotation(
-            doc,
-            Span(doc, 0, len(doc), label=section_name),
-            key="section_name",
-        )
-
-        docs.append(doc)
-
-        assert 0 <= sentence_id - docs[-1]._.sentence_id <= 1
-
-    docs = merge_docs(nlp, docs)
-
-    return df, docs
-
-
-def merge_contiguous_spans(doc, spans):
-    merged_spans = []
-
-    for span in spans:
-        # Check if there are no merged spans yet or if the current span's label differs from the last merged span's label.
-        if not merged_spans or span.label_ != merged_spans[-1].label_:
-            # Add the current span as a new merged span.
-            merged_spans.append(span)
-        else:
-            # Extend the last merged span to include the current span.
-
-            merged_spans[-1] = Span(
-                doc, merged_spans[-1].start, span.end, label=span.label_
-            )
-
-    assert spans != merged_spans
-
-    return merged_spans
-
-
-def merge_docs(nlp, docs):
-    # Create new Doc
-    pretty_text = ""
-    for doc in docs:
-        # if doc._.segment_id == 1:
-        #    pretty_text += "\n"
-        pretty_text += doc.text
-
-    new_doc = nlp(pretty_text)
-    print(len(list(new_doc.sents)))
-
-    # Copy custom attributes
-    # First set Doc attributes using only the first doc passed in
-    for custom_attr in docs[0]._._extensions.keys():
-        new_doc._.set(custom_attr, docs[0]._.get(custom_attr))
-    assert new_doc._._extensions.keys()
-    assert new_doc._.title
-    # Merge all span attributes from docs, taking care to fix offsets and recreating from character indexes and not token indexes, as they may have changed with the new_doc tokenisation.
-    char_offset = 0
-    for doc in docs:
-        for custom_attr in doc.spans.keys():
-            spans = [
-                new_doc.char_span(
-                    s.start_char + char_offset,
-                    s.end_char + char_offset,
-                    s.label,
-                    alignment_mode="expand",  # TODO check
-                )
-                for s in doc.spans.get(custom_attr)
-            ]
-
-            add_annotations(new_doc, spans, custom_attr)
-
-        char_offset += len(doc.text)
-
-    new_doc.spans["section_name"] = merge_contiguous_spans(
-        new_doc, new_doc.spans["section_name"]
-    )
-
-    return new_doc
-
-
-def spacy_to_prodigy_spans(doc):
-    spans = []
-    for custom_attr in doc.spans.keys():
-        spans.extend(
-            [
-                {
-                    "start": s.start_char,
-                    "end": s.end_char,
-                    "label": s.label_,
+def reserialize_corpus_jsonl(path: Path):
+    title, genre = "", []
+    sentences: list[str] = []
+    with open(path, "rb") as f:
+        for line in f:
+            d = orjson.loads(line)
+            if title and d["title"] != title:
+                yield {
+                    "title": title,
+                    "genre": genre,
+                    "sentences": sentences,
                 }
-                for s in doc.spans.get(custom_attr)
-            ]
+                # TODO: These are also sentence-level: "tags": d["tags"],
+                sentences = [d["text"]]
+                title = d["title"]
+                genre = d["genre"]
+            else:
+                title = d["title"]
+                genre = d["genre"]
+                sentences.append(d["text"])
+    if sentences:
+        yield {
+            "title": title,
+            "genre": genre,
+            "sentences": sentences,
+        }
+
+
+def file_to_text_iter(f: BufferedReader) -> Iterator[dict]:
+    for line in f:
+        yield orjson.loads(line)
+
+
+def text_to_sentence_iter(xs: Iterator[dict]) -> Iterator[tuple[str, dict[str, str]]]:
+    for x in xs:
+        for sentence in x["sentences"]:
+            yield (sentence, {"genre": x["genre"], "title": x["title"]})
+
+
+def batch(xs: Iterator[str], n: int) -> Iterator[list[str]]:
+    if n < 1:
+        raise ValueError("n must be at least one")
+    it = iter(xs)
+    while batch := list(islice(it, n)):
+        yield batch
+
+
+def file_exists_and_complete(file_path: Path) -> bool:
+    """Check if a file exists and is not 0-byte (complete)."""
+    return file_path.exists() and file_path.stat().st_size > 0
+
+
+def get_cached_paths(path: Path, nlp: Language, batch_size: int = 100000):
+    hash_obj = xxhash.xxh64()
+    # Hash values affecting outcome:
+    hash_obj.update(spacy.__version__.encode())
+    hash_obj.update(nlp.meta["name"].encode())
+    hash_obj.update(nlp.meta["version"].encode())
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hash_obj.update(chunk)
+
+    hash_string = hash_obj.hexdigest()
+
+    # Get cache (base) path
+    cache_path = Path("cache")
+    cache_path.mkdir(exist_ok=True)
+    parsed_path = cache_path / Path(
+        path.stem
+        + f"-{spacy.__version__}-{nlp.meta['name']}-{nlp.meta['version']}-{hash_string}"
+    )
+    # file_pattern = f"{parsed_path.stem}-*.spacy"
+
+    # Determine the total number of batches expected
+    with open(path, "rb") as f:
+        total_docs = sum(1 for _ in text_to_sentence_iter(file_to_text_iter(f)))
+    total_batches = (total_docs + batch_size - 1) // batch_size
+    batch_sizes = {
+        batch: (batch_size if batch != total_batches - 1 else total_docs % batch_size)
+        for batch in range(total_batches)
+    }
+    return cache_path, parsed_path, total_batches, batch_sizes
+
+
+def parse_batch(batch_file, nlp_vocab):
+    return list(DocBin().from_disk(batch_file).get_docs(nlp_vocab))
+
+
+def parse_docs(
+    path: Path,
+    nlp: Language,
+    batch_size: int = 100000,
+) -> Iterator[Doc]:
+    cache_path, parsed_path, total_batches, batch_sizes = get_cached_paths(
+        path, nlp, batch_size
+    )
+
+    for batch_num in tqdm(range(total_batches)):
+        batch_file = cache_path / f"{parsed_path.stem}-{batch_num}.spacy"
+        if file_exists_and_complete(batch_file):
+            for doc in tqdm(
+                DocBin().from_disk(batch_file).get_docs(nlp.vocab),
+                total=batch_sizes[batch_num],
+            ):
+                yield doc
+        else:
+            raise Exception(f"Incomplete file {batch_file}, re-analyze.")
+
+
+# from memory_profiler import profile
+# @profile
+def parse_or_get_docs(
+    path: Path,
+    nlp: Language,
+    batch_size: int = 100000,
+    tokenize_only: bool = False,
+    cache_only: bool = False,
+) -> Iterator[Doc]:
+    cache_path, parsed_path, total_batches, batch_sizes = get_cached_paths(
+        path, nlp, batch_size
+    )
+
+    # Use multiprocessing if not on GPU; clamp max processes to 8 for perf/memory sweet spot
+    processes = min(os.cpu_count() or 4 // 2, 4) if not spacy.prefer_gpu() else 1
+    print(f"Using {processes} processes for {path}.")
+
+    # Process and yield each batch in order
+    with open(path, "rb") as f:
+        for batch_num, sentence_tuples_batch in enumerate(
+            tqdm(
+                batch(text_to_sentence_iter(file_to_text_iter(f)), n=batch_size),
+                total=total_batches,
+            )
+        ):
+            batch_file = cache_path / f"{parsed_path.stem}-{batch_num}.spacy"
+            if file_exists_and_complete(batch_file):
+                if cache_only:
+                    continue
+                for doc in tqdm(
+                    DocBin().from_disk(batch_file).get_docs(nlp.vocab),
+                    total=batch_sizes[batch_num],
+                ):
+                    yield doc
+            else:
+                if batch_file.exists():
+                    print(f"Incomplete file {batch_file}, re-analyzing...")
+                doc_bin = DocBin(store_user_data=True)
+
+                with tqdm(total=batch_sizes[batch_num]) as pbar:
+                    if tokenize_only:
+                        # Note that with nlp.make_doc, only a straighforward tokenization is performed,
+                        # and UD POS mappings are not fully aligned with the guidelines (AUX/NOUN -> VERB, etc.).
+                        # Any analysis at this level should only use features available from Sudachi as-is.
+                        for text, context in sentence_tuples_batch:
+                            doc = nlp.make_doc(text)
+                            pbar.update(1)
+                            doc.user_data["genre"] = context["genre"]
+                            doc.user_data["title"] = context["title"]
+                            yield doc
+                            doc_bin.add(doc)
+                    else:
+                        for doc, context in nlp.pipe(
+                            sentence_tuples_batch,
+                            as_tuples=True,
+                            batch_size=5000,  # for sentences, a larger number (5000) is recommended
+                            n_process=processes,
+                        ):
+                            pbar.update(1)
+                            doc.user_data["genre"] = context["genre"]
+                            doc.user_data["title"] = context["title"]
+                            if not cache_only:
+                                yield doc
+                            doc_bin.add(doc)
+                gc.collect()  # TODO Even with this, there seems to be a memory release issue.
+                doc_bin.to_disk(f"{cache_path}/{parsed_path.stem}-{batch_num}.spacy")
+                gc.collect()
+
+
+def extract_dm(docs: Iterator[Doc], nlp: Language) -> list[dict]:
+    nlp, c_matcher = create_connectives_matcher(nlp=nlp)
+    nlp, sf_matcher = create_sf_matcher(nlp=nlp)
+    for i, doc in enumerate(docs):
+        c_matches = [
+            {
+                "span": span,
+                "表現": span.label_,
+                "タイプ": "接続表現",
+                "機能": connectives_classifications[span.label_][
+                    0
+                ],  # Extract 1-5 from string start
+                "細分類": connectives_classifications[span.label_],  # The whole string
+                "position": span.start_char / len(span.doc.text),
+                "ジャンル": doc.user_data["genre"][0],
+                "title": doc.user_data["title"],
+                "sentence_id": i,
+            }
+            for span in connectives_match(doc, nlp, c_matcher)
+        ]
+        sf_matches = [
+            {
+                "span": span,
+                "表現": span.label_,
+                "タイプ": "文末表現",
+                "機能": sf_classifications[span.label_][0],
+                "細分類": sf_classifications[span.label_][1],
+                "position": span.start_char / len(span.doc.text),
+                "ジャンル": doc.user_data["genre"][0],
+                "title": doc.user_data["title"],
+                "sentence_id": i,
+            }
+            for span in pattern_match(doc, nlp, sf_matcher)
+        ]
+        linear_matches = sorted(
+            c_matches + sf_matches, key=lambda d: d["span"].start_char
         )
-    return spans
+        yield linear_matches
+
+
+def export_dms(matches, file_name: str):
+    df = pd.DataFrame.from_records([pattern for match in matches for pattern in match])
+    df.to_csv(file_name, index=False)
+    try:
+        df.to_excel(Path(file_name).stem + ".xlsx", index=False)
+    except ValueError as e:  # If we exceed 1M rows, ignore and use CSV only
+        print(f"Skipping Excel export: {e}")
+
+
+def export_count(file_name: str):
+    df = pd.read_csv(file_name)
+    grouped = df.groupby(["タイプ", "ジャンル", "機能", "細分類", "表現"]).size()
+
+    result_df = grouped.reset_index(name="頻度")
+    result_df = result_df.sort_values(
+        by=["タイプ", "ジャンル", "頻度"], ascending=[True, True, False]
+    )
+    result_df.to_csv(f"{Path(file_name).stem}-counts.csv", index=False)
+    result_df.to_excel(f"{Path(file_name).stem}-counts.xlsx", index=False)
+
+
+def run_thread_wrapped():
+    return ThreadPoolExecutor().submit(foo).result()
 
 
 if __name__ == "__main__":
-    with open("annotations.jsonl", "w") as f:
-        db = connect()
-        examples = []
-        for excel in Path("resources/analyses/").glob("*.xlsx"):
-            print(excel)
-            df, doc = read_annotations_excel(excel, model="ja_ginza")
-            assert len(df) > 0
-            assert len(doc) > 0
+    # Corpus preprocessing
+    with open("learner-corpus.jsonl", "wb") as f:
+        for text in reserialize_corpus_jsonl(
+            Path("resources/learner-2022-09-08.jsonl")
+        ):
+            f.write(orjson.dumps(text, option=orjson.OPT_APPEND_NEWLINE))
+    with open("native-corpus.jsonl", "wb") as f:
+        for text in reserialize_corpus_jsonl(Path("resources/native-2022-09-08.jsonl")):
+            f.write(orjson.dumps(text, option=orjson.OPT_APPEND_NEWLINE))
 
-            assert {"section_name", "rid", "dm"} <= set(df.columns.to_list())
+    with open("science-corpus.jsonl", "wb") as f:
+        for text in reserialize_corpus_jsonl(Path("resources/native-2022-09-08.jsonl")):
+            genre = text["genre"][0]
+            # filter on science genres
+            if genre in {
+                "科学技術論文",
+                "人文社会学論文",
+                # "社会科学専門書",
+            }:
+                f.write(orjson.dumps(text, option=orjson.OPT_APPEND_NEWLINE))
 
-            f.write(json.dumps(doc.to_json(), ensure_ascii=False) + "\n")
+    # E2E test
+    SPACY_MODEL = os.environ.get("SPACY_MODEL", "ja_ginza")
+    spacy.prefer_gpu()
+    nlp = spacy.load(SPACY_MODEL, disable=["ner"])
+    if "ginza" in SPACY_MODEL:
+        nlp.add_pipe("disable_sentencizer", before="parser")
 
-            spans = [
-                {"start": span.start_char, "end": span.end_char, "label": span.label_}
-                for span_type in doc.spans.keys()
-                for span in doc.spans.get(span_type, [])
-            ]
-            examples.append(
-                {
-                    "text": doc.text,
-                    "spans": spans,
-                    "title": doc._.title,
-                    "answer": "accept",
-                }
-            )
+    # docs = parse_or_get_docs(Path("learner-corpus.jsonl"), nlp)
+    # # Extract dms
+    # matches = list(extract_dm(docs, nlp))
+    # print(len(matches), len([match for match in matches if match]))
+    # export_dms(matches, "learner-dms.csv")
+    # export_count("learner-dms.csv")
 
-            Path(f"annotations_{doc._.title}.html").unlink(missing_ok=True)
-            Path(f"annotations_deps_{doc._.title}.html").unlink(missing_ok=True)
-            # for doc in doc:
-            colors = [
-                "#F8766D",
-                "#CD9600",
-                "#7CAE00",
-                "#00BE67",
-                "#00BFC4",
-                "#00A9FF",
-                "#C77CFF",
-                "#FF61CC",
-            ]
-            color_map = {
-                span.label_: colors[0]
-                for span in doc.spans.get("connective", SpanGroup(doc))
-            }
-            color_map |= {
-                span.label_: colors[1]
-                for span in doc.spans.get("modality", SpanGroup(doc))
-            }
-            color_map |= {
-                span.label_: colors[2]
-                for span in doc.spans.get("segment", SpanGroup(doc))
-            }
-            color_map |= {
-                span.label_: colors[3]
-                for span in doc.spans.get("section_name", SpanGroup(doc))
-            }
-            doc.spans["sc"] = (
-                doc.spans.get("connective", SpanGroup(doc))
-                + doc.spans.get("modality", SpanGroup(doc))
-                + doc.spans.get("segment", SpanGroup(doc))
-                + doc.spans.get("section_name", SpanGroup(doc))
-            )
-
-            svg = displacy.render(
-                doc,
-                style="span",
-                options={"colors": color_map},
-            )
-            deps_svg = displacy.render(
-                doc.sents, style="dep", options={"compact": True}
-            )
-            Path(f"annotations_{doc._.title}.html").open("w").write(svg)
-            Path(f"annotations_{doc._.title}_deps.html").open("w").write(deps_svg)
-
-        db.add_dataset("imported_annotations")  # add dataset ner_sample
-        examples = (set_hashes(eg) for eg in examples)  # add hashes; creates generator
-        db.add_examples(
-            list(examples), ["imported_annotations"]
-        )  # add examples to ner_sample; need list as was generator
-    # colors = [
-    #     "#F8766D",
-    #     "#CD9600",
-    #     "#7CAE00",
-    #     "#00BE67",
-    #     "#00BFC4",
-    #     "#00A9FF",
-    #     "#C77CFF",
-    #     "#FF61CC",
-    # ]
-
-    # nlp = spacy.load("ja_core_news_trf")
-    # docs = nlp.pipe(text.splitlines())
-    # Path("ryu.html").unlink(missing_ok=True)
-    # Path("ryu_deps.html").unlink(missing_ok=True)
-    # for doc in docs:
-    #     m_spans = modality_match(doc)
-    #     c_spans = connectives_match(doc)
-
-    #     doc.spans["modality"] = m_spans
-    #     doc.spans["connectives"] = c_spans
-    #     doc.spans["sc"] = m_spans + c_spans
-
-    #     color_map = {span.label_: colors[0] for span in m_spans}
-    #     color_map |= {span.label_: colors[1] for span in c_spans}
-
-    #     svg = displacy.render(doc, style="span", options={"colors": color_map})
-    #     deps_svg = displacy.render(doc, style="dep", options={"compact": True})
-    #     Path("ryu.html").open("a").write(svg)
-    #     Path("ryu_deps.html").open("a").write(deps_svg)
-    # for excel in Path("resources/analyses/").glob("*.xlsx"):
-    #     assert read_annotations_excel(excel) is not None
+    # docs = parse_or_get_docs(Path("science-corpus.jsonl"), nlp, cache_only=False)
+    docs = parse_docs(Path("science-corpus.jsonl"), nlp)
+    # Extract dms
+    matches = list(extract_dm(docs, nlp))
+    print(len(matches), len([match for match in matches if match]))
+    export_dms(matches, "science-dms.csv")
+    export_count("science-dms.csv")

@@ -3,7 +3,7 @@
   lib,
   ...
 }: let
-  cuda = false;
+  cuda = true;
   rocm = false;
 
   cudaVersion = "12.2";
@@ -51,34 +51,40 @@ in
   {
     # https://devenv.sh/basics/
     # https://devenv.sh/packages/
-    packages = with pkgs;
-      [
-        zlib
-        gcc-unwrapped.lib
-        cmake
+    packages =
+      with pkgs; [
+        # gcc-unwrapped.lib
+        # cmake
         nodejs
         yarn
         graphviz
         fswatch
+        stdenv.cc.libc
+        #stdenv.cc.cc
+        #stdenv.cc.cc.lib
+        zlib
+        linuxPackages_latest.nvidia_x11
       ]
-      ++ lib.optionals (!cuda) [
-        stdenv
-        stdenv.cc
-      ]
-      ++ lib.optionals cuda [
-        cudaPackages.backendStdenv
-        cudaPackages.backendStdenv.cc
-      ]
-      ++ lib.optionals rocm [
-        rocm-all
-        # pkgs.rocmPackages.meta.rocm-hip-runtime
-        # pkgs.rocmPackages.meta.rocm-hip-sdk
-      ];
+      # ++ lib.optionals (!cuda) [
+      #   stdenv
+      #   stdenv.cc
+      # ]
+      # ++ lib.optionals cuda [
+      #   cudaPackages.backendStdenv
+      #   cudaPackages.backendStdenv.cc
+      # ]
+      # ++ lib.optionals rocm [
+      #   rocm-all
+      #   # pkgs.rocmPackages.meta.rocm-hip-runtime
+      #   # pkgs.rocmPackages.meta.rocm-hip-sdk
+      # ]
+      ;
     # https://devenv.sh/scripts/
     enterShell = ''
-      poetry run python -m ipykernel install --user --name=devenv-$(basename $PWD)
+      # poetry run python -m ipykernel install --user --name=devenv-$(basename $PWD)
       export LICENSE=$(cat /var/run/agenix/prodigy)
       export OPENAI_API_KEY=$(cat /var/run/agenix/openai-api)
+      export AZURE_API_KEY=$(cat /var/run/agenix/azure-openai-key)
       # Integrating into pyproject.toml:
       # pip wheel prodigy -f https://$LICENSE@download.prodi.gy --wheel-dir wheels
       # pip install wheels/prodigy-1.12.5-cp311-cp311-linux_x86_64.whl
@@ -96,32 +102,40 @@ in
         with ps; [
           pygraphviz
         ]);
+      libraries = with pkgs; [
+        zlib
+        stdenv.cc.libc
+        linuxPackages_latest.nvidia_x11
+        cuda-native-redist
+      ];
       poetry = {
         enable = true;
         activate.enable = true;
       };
+      uv.enable = true;
     };
 
     env.PRODIGY_HOME = "./prodigy";
-    env.LD_LIBRARY_PATH = lib.mkIf pkgs.stdenv.isLinux (
-      lib.makeLibraryPath (with pkgs;
-        [
-          zlib
-          gcc-unwrapped.lib
-          stdenv.cc.libc
-        ]
-        ++ lib.optionals (!cuda) [
-        ]
-        ++ lib.optionals rocm [
-          libdrm
-          rocm-all
-        ]
-        ++ lib.optionals cuda [
-          cuda-native-redist
-        ])
-    );
+    # env.LD_LIBRARY_PATH = ".devenv/profile/lib:${cuda-native-redist}";
+    # env.LD_LIBRARY_PATH = lib.mkIf pkgs.stdenv.isLinux (
+    #   lib.makeLibraryPath (with pkgs;
+    #     [
+    #       zlib
+    #       gcc-unwrapped.lib
+    #       stdenv.cc.libc
+    #     ]
+    #     ++ lib.optionals (!cuda) [
+    #     ]
+    #     ++ lib.optionals rocm [
+    #       libdrm
+    #       rocm-all
+    #     ]
+    #     ++ lib.optionals cuda [
+    #       cuda-native-redist
+    #     ])
+    # );
 
-    scripts.check-gpu.exec = "python -c \"import spacy;print(spacy.prefer_gpu())\"";
+    scripts.check-gpu.exec = "python -c \"import spacy;print(spacy.prefer_gpu());import torch;print(torch.cuda.is_available())\"";
 
     # https://devenv.sh/pre-commit-hooks/
     # pre-commit.hooks.shellcheck.enable = true;
@@ -134,8 +148,8 @@ in
   (
     if cuda
     then {
-      env.CUDA_HOME = "${cuda-native-redist}";
-      env.CUDA_PATH = "${cuda-native-redist}";
+      # env.CUDA_HOME = "${cuda-native-redist}";
+      # env.CUDA_PATH = "${cuda-native-redist}";
     }
     else if rocm
     then {

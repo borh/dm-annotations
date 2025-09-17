@@ -1,81 +1,104 @@
-[tool.poetry]
+[project]
 name = "dm-annotations"
 version = "0.1.0"
 description = "Discourse marker annotations and analysis model for academic Japanese text"
-authors = ["Bor Hodošček <hodoscek.bor.hmt@osaka-u.ac.jp>"]
-license = "MIT"
 readme = "README.md"
-packages = [{include = "dm_annotations", from = "src"}]
+authors = [
+    { name = "Bor Hodošček", email = "dev@bor.space" }
+]
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "altair>=5.5.0",
+    "anthropic>=0.64.0",
+    "cupy-cuda12x>=13.4.1",
+    "duckdb>=1.3.2",
+    "ginza>=5.2.0",
+    "ja-ginza>=5.2.0",
+    # "ja-ginza-bert-large",
+    "jaconv>=0.4.0",
+    "matplotlib>=3.10.3",
+    "netgraph>=4.13.2",
+    "networkx>=3.4.2",
+    "openai>=1.99.9",
+    "openpyxl>=3.1.5",
+    "orjson>=3.10.18",
+    "pandoc>=2.4",
+    "peewee",
+    "polars[pyarrow]>=1.29.0",
+    "prodigy",
+    "pyarrow>=20.0.0",
+    "pypandoc>=1.15",
+    "pyrsistent>=0.20.0",
+    "python-louvain>=0.16",
+    "pyyaml>=6.0.2",
+    "scikit-bio>=0.7.0",
+    "spacy-transformers>=1.2.5",
+    "sqlglot>=27.6.0",
+    "statsmodels>=0.14.4",
+    "tokenizers>=0.21.1",
+    "torch>=2.7.0",
+    "transformers>=4.17.0",
+    "vegafusion>=2.0.2",
+    "vl-convert-python>=1.8.0",
+    "wtpsplit==2.1.6",
+    "xlsxwriter>=3.2.3",
+    "xxhash>=3.5.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.11"
-prodigy = { file = "wheels/prodigy-1.14.12-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
-pandas = "^2.0.3"
-polars = "^0.18.6"
-openpyxl = "^3.1.2"
-ipykernel = "^6.24.0"
-pyarrow = "^12.0.1"
-# spacy-transformers = "^1.2.2"
-torch = "^2.1.0" # {version = "^2.1.0+cpu", source = "pytorch-cpu"}
-lmql = "^0.7b3"
-networkx = "^3.1"
-matplotlib = "^3.7.3"
-dspy-ai = "^2.0.8"
-openai = "^0.28.1"
+[project.optional-dependencies]
+marimo = [
+    "altair",
+    "marimo[recommended,lsp]==0.15.2", # FIXME: https://github.com/marimo-team/marimo/issues/6322
+    "prince>=0.16.1",
+    "scikit-bio>=0.7.0",
+    "scikit-learn>=1.7.1",
+    "watchdog>=6.0.0",
+]
 
-# [tool.poetry.group.spacy.dependencies]
-ja_core_news_sm = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.6.0/ja_core_news_sm-3.6.0-py3-none-any.whl"}
-ja_core_news_trf = {url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.6.1/ja_core_news_trf-3.6.1-py3-none-any.whl"}
-# pygraphviz = "^1.11"
-cupy-cuda12x = "^12.2.0"
-jaconv = "^0.3.4"
-pyrsistent = "^0.20.0"
-orjson = "^3.9.10"
-xxhash = "^3.4.1"
-marimo = "^0.1.68"
-memory-profiler = "^0.61.0"
-netgraph = "^4.13.2"
-python-louvain = "^0.16"
-altair = "^5.2.0"
-vegafusion = {extras = ["embed"], version = "^1.6.1"}
-statsmodels = "^0.14.1"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/dm_annotations"]
 
-[tool.poetry.group.ginza.dependencies]
-ginza = "^5.1.3"
-ja-ginza = "^5.1.3"
-ja-ginza-bert-large = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.1.3/ja_ginza_bert_large-5.1.3b1-py3-none-any.whl" }
+[tool.uv.sources]
+# ja-ginza-bert-large = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza_bert_large-5.2.0b1-py3-none-any.whl" }
+prodigy = { path = "wheels/prodigy-1.15.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
+peewee = { path = "wheels/peewee-3.16.3-py3-none-any.whl" }
 
-[tool.poetry.group.dev.dependencies]
-black = "^23.3.0"
-pytest-xdist = "^3.5.0"
-pytest = "^7.4.2"
-pytest-watcher = "^0.3.4"
-pytest-testmon = "^1.2.2"
+[dependency-groups]
+dev = [
+    "mypy>=1.16.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+    "ty>=0.0.1a17",
+    "types-networkx>=3.5.0.20250610",
+    "types-openpyxl>=3.1.5.20250602",
+    "types-tqdm>=4.67.0.20250516",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q"
+addopts = "-ra -q --doctest-modules"
 testpaths = [
     "tests",
+    "src",
 ]
-filterwarnings = ["ignore:.*(FutureWarning|DeprecationWarning|PydanticDeprecatedSince)"]
+doctest_optionflags = "NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL"
+disable_test_id_escaping_and_forfeit_all_rights_to_community_support = true
 
+[tool.marimo.language_servers.pylsp]
+enabled = true               # Enable/disable the Python language server
+enable_mypy = true           # Type checking with mypy (enabled by default, if installed)
+enable_ruff = true           # Linting with ruff (enabled by default, if installed)
+enable_flake8 = false        # Linting with flake8
+enable_pydocstyle = false    # Check docstring style
+enable_pylint = false        # Linting with pylint
+enable_pyflakes = false      # Syntax checking with pyflakes
 
-[[tool.poetry.source]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-priority = "explicit"
+[tool.marimo.diagnostics]
+enabled = true               # Show diagnostics in the editor
 
-# [[tool.poetry.source]]
-# name = "pytorch-cuda"
-# url = "https://download.pytorch.org/whl/cu118"
-# priority = "explicit"
-
-[[tool.poetry.source]]
-name = "pytorch-rocm"
-url = "https://download.pytorch.org/whl/rocm5.6"
-priority = "explicit"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.marimo.runtime]
+output_max_bytes = 10_000_000

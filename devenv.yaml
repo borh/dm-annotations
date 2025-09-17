@@ -1,6 +1,5 @@
 allowUnfree: true
 inputs:
-  # devenv:
-  #   url: github:cachix/devenv/python-rewrite
   nixpkgs:
-    url: github:NixOS/nixpkgs/master
+    url: github:cachix/devenv-nixpkgs/rolling
+    # url: github:nixos/nixpkgs/nixos-unstable-small

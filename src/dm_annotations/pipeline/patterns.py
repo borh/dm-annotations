@@ -1,29 +1,81 @@
+"""Lazy‐loaded DSL → spaCy pattern definitions for discourse‐marker extraction.
+
+Attributes (lazy‐loaded on first access):
+  modality_patterns: dict[str, Any]
+  connectives_patterns: list[dict[str,Any]]
+  connectives_regexes: list[dict[str,Any]]
+  connectives_classifications: dict[str, str]
+
+Utility functions:
+  split_defs, termpp, parallel_expand, expand_patterns
+"""
+
+import functools
 import json
 import re
+from pathlib import Path
+from typing import Any
+
 from pyrsistent import (
-    v,
-    m,
-    s,
-    PVector,
     PMap,
     PSet,
+    PVector,
+    m,
+    s,
     thaw,
+    v,
 )
 
-from pathlib import Path
+# locate resource JSON files
+module_dir = Path(__file__).parent
+# go up 3 levels to the repo root
+project_root = module_dir.parent.parent.parent
 
-try:
-    module_dir = Path(__file__).parent
-except NameError:
-    module_dir = Path(".").parent
+# paths to JSON definitions
+_MODALITY_PATH = project_root / "resources/modality-patterns.json"
+_CONN_PATTERNS_PATH = project_root / "resources/connectives-patterns.json"
+_CONN_REGEXES_PATH = project_root / "resources/connectives-regexes.json"
 
-project_root = module_dir.parent.parent
 
-with open(project_root / "resources/modality-patterns.json") as f:
-    modality_patterns = json.loads(f.read())
+@functools.lru_cache(maxsize=1)
+def _load_json(path: Path) -> Any:
+    """Helper: load & cache a JSON file."""
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def __getattr__(name: str) -> Any:
+    """
+    Lazy‐load the JSON patterns when these names are first accessed.
+
+    >>> isinstance(modality_patterns, dict)
+    True
+    """
+    if name == "modality_patterns":
+        return _load_json(_MODALITY_PATH)
+    if name == "connectives_patterns":
+        return _load_json(_CONN_PATTERNS_PATH)
+    if name == "connectives_regexes":
+        return _load_json(_CONN_REGEXES_PATH)
+    if name == "connectives_classifications":
+        ct: dict[str, str] = {}
+        for pat in _load_json(_CONN_PATTERNS_PATH):
+            for sub in split_defs(pat["conjunction"]):
+                ct[sub] = pat["kinou"]
+        for pat in _load_json(_CONN_REGEXES_PATH):
+            for sub in split_defs(pat["conjunction"]):
+                ct[sub] = pat["kinou"]
+        return ct
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def split_defs(s: str) -> set[str]:
+    """
+    Split a DSL `conjunction` string into its component names.
+
+    >>> split_defs("あ、い（う）")
+    {'あ', 'い', 'う'}
+    """
     comma_splits = s.split("、")
     paren_splits = s.split("（")
     defs = (
@@ -34,8 +86,13 @@ def split_defs(s: str) -> set[str]:
     return set(defs)
 
 
-def termpp(s):
-    """Returns the first pattern name."""
+def termpp(s: str) -> str:
+    """
+    Return the primary pattern name from a DSL conjunction descriptor.
+
+    >>> termpp("例（主）")
+    '主'
+    """
     m = re.search(r"（([^）]+)）", s)
     if m:
         return m.group(1)
@@ -43,44 +100,31 @@ def termpp(s):
         return s.split("、")[0]
 
 
-# TODO ものの as 文中接続表現
-with open(project_root / "resources/connectives-patterns.json") as f:
-    connectives_patterns = json.loads(f.read())
-    connectives_classifications = {
-        sub_pattern: pattern["kinou"]
-        for pattern in connectives_patterns
-        for sub_pattern in split_defs(pattern["conjunction"])
-    }
-
-with open(project_root / "resources/connectives-regexes.json") as f:
-    connectives_regexes = json.loads(f.read())
-    connectives_classifications = connectives_classifications | {
-        sub_pattern: pattern["kinou"]
-        for pattern in connectives_regexes
-        for sub_pattern in split_defs(pattern["conjunction"])
-    }
-
-
 def parallel_expand(
     element: PVector | PMap | PSet,
-) -> PVector[PVector[PMap[str, str | PMap[str, str]]]]:
+) -> PVector[PVector[PMap[str, Any]]]:
     """
     Recursively walks a nested structure of PVector, PSet, and PMap objects,
     building a vector of Spacy token patterns.
 
-    :param element: The nested structure to process.
-    :return: A nested PVector of Spacy token patterns.
+    :param element: a nested Pyrsistent DSL element
+    :return: expanded token‐pattern sequences
+
+    >>> from pyrsistent import m, v
+    >>> result = parallel_expand(m({"ORTH": "テ"}))
+    >>> isinstance(result[0][0], dict)
+    True
     """
     if isinstance(element, PMap):
         # A single token pattern, wrap in a vector
         return v(v(element))
     elif isinstance(element, PVector):
         # Initialize the result as an empty vector for concatenation
-        result = v(v())
+        result: PVector[PVector[PMap[str, Any]]] = v(v())
         for item in element:
             expanded = parallel_expand(item)
             # Concatenate each expanded item with each vector in the current result
-            new_result = v()
+            new_result: PVector[PVector[PMap[str, Any]]] = v()
             if result == v(v()):
                 # If result is still an empty vector of vectors, replace it directly
                 new_result = expanded
@@ -92,7 +136,7 @@ def parallel_expand(
         return result
     elif isinstance(element, PSet):
         # Process a set (OR semantics)
-        result = v()
+        result: PVector[PVector[PMap[str, Any]]] = v()
         for item in element:
             expanded = parallel_expand(item)
             # For each item in the set, create new branches
@@ -103,9 +147,19 @@ def parallel_expand(
         raise TypeError(f"Unsupported type: {type(element)} for {element}")
 
 
-def expand_patterns(patterns):
-    """Expands the DSL patterns into vanilla Python data to be passed to
-    spaCy's Matcher."""
+def expand_patterns(patterns: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """
+    Convert DSL pattern definitions into spaCy Matcher‐ready dicts.
+
+    :param patterns: mapping from pattern_name to {"pattern": DSL}
+    :return: mapping where each entry has a real "pattern" list
+
+    >>> from pyrsistent import m, v
+    >>> dsl = {"X": {"pattern": v(m({"ORTH": "テ"}))}}
+    >>> expanded = expand_patterns(dsl)
+    >>> expanded["X"]["pattern"][0][0]["ORTH"]
+    'テ'
+    """
     return {
         pattern_name: d | {"pattern": thaw(parallel_expand(d["pattern"]))}
         for pattern_name, d in patterns.items()
@@ -216,6 +270,7 @@ VERB_PHRASE = OR(
     ),
     AND(SURU, m(POS="AUX", OP="*")),
 )
+
 
 modality_patterns_2 = {
     "だ": {
@@ -628,7 +683,7 @@ sf_definitions = {
     },
     "ことを意図する": {
         "category": ["意志・措置行為", "意図する"],
-        "examples": ["何をすることを意図するのか"],
+        "examples": ["何をすることを意図する"],
         "pattern": AND(
             KOTO,
             m(ORTH="を"),
@@ -818,7 +873,7 @@ sf_definitions = {
     },
     "とは限らない": {
         "category": ["否定（部分否定）", "限らない"],
-        "examples": ["成功するとは限らない", "簡単だとはかぎらない"],
+        "examples": ["成功するとは限らない", "そうとはかぎらない"],
         "pattern": AND(
             m(ORTH="と"),
             m(ORTH="は"),
@@ -883,7 +938,7 @@ sf_definitions = {
         "category": ["推量・意志", "考える"],
         "examples": ["その理由が考えられる", "工事を中止することが考えられる"],
         "pattern": AND(
-            m(ORTH="が"),
+            m(ORTH="が"),  # TODO: also も
             m(NORM="考える"),
             RARE,
         ),
@@ -1103,7 +1158,26 @@ sf_definitions = {
             DEARU,
         ),
     },
-    "Nである": {  # NOTE: ことである, ためである, ...
+    "わけである": {
+        "category": ["断定・存在", "である"],
+        "examples": ["これはないわけである"],
+        "pattern": AND(
+            m(
+                POS="NOUN",
+                NORM=m(IN=AND("わけ", "訳")),
+            ),
+            DEARU,
+        ),
+    },
+    "はずである": {
+        "category": ["断定・存在", "である"],
+        "examples": ["これはないはずである"],
+        "pattern": AND(
+            m(POS="NOUN", NORM=m(IN=AND("はず", "筈"))),
+            DEARU,
+        ),
+    },
+    "Nである": {  # NOTE: ことである, ためである, ... are their own patterns
         "category": ["断定・存在", "である"],
         "examples": ["これは事実である"],
         "pattern": AND(
@@ -1111,7 +1185,18 @@ sf_definitions = {
                 POS="NOUN",
                 NORM=m(
                     NOT_IN=AND(
-                        "こと", "事", "ため", "為", "もの", "物", "ゆえん", "所以"
+                        "こと",
+                        "事",
+                        "ため",
+                        "為",
+                        "もの",
+                        "物",
+                        "ゆえん",
+                        "所以",
+                        "筈",
+                        "はず",
+                        "わけ",
+                        "訳",
                     )
                 ),
             ),
@@ -1235,7 +1320,7 @@ sf_definitions = {
         ),
     },
     "Vてしまう": {
-        "category": ["NA", "てしまう"],
+        "category": ["断定", "てしまう"],
         "examples": ["忘れてしまう"],
         "pattern": AND(
             VERB_PHRASE,
@@ -1281,11 +1366,38 @@ sf_definitions = {
             SURU,
         ),
     },
+    "必要とする": {
+        "category": ["意志・措置行為", "とする"],
+        "examples": ["これを必要とする"],
+        "pattern": AND(
+            m(POS="NOUN", NORM="必要"),
+            m(ORTH="と"),
+            SURU,
+        ),
+    },
+    "こととする": {
+        "category": ["意志・措置行為", "とする"],
+        "examples": ["これを必要なこととする"],
+        "pattern": AND(
+            m(POS="NOUN", NORM=m(IN=AND("事", "こと"))),
+            m(ORTH="と"),
+            SURU,
+        ),
+    },
+    "ものとする": {
+        "category": ["意志・措置行為", "とする"],
+        "examples": ["これをものとする"],
+        "pattern": AND(
+            m(POS="NOUN", NORM=m(IN=AND("もの", "物"))),
+            m(ORTH="と"),
+            SURU,
+        ),
+    },
     "Nとする": {
         "category": ["意志・措置行為", "とする"],
         "examples": ["彼をリーダーとする", "これを最優先事項とする"],
         "pattern": AND(
-            m(POS="NOUN"),
+            m(POS="NOUN", NORM=m(NOT_IN=AND("事", "こと", "もの", "物", "必要"))),
             m(ORTH="と"),
             SURU,
         ),
@@ -1491,36 +1603,36 @@ sf_classifications = {sf_name: d["category"] for sf_name, d in sf_definitions.it
 
 sf_patterns = expand_patterns(sf_definitions)
 
+# # Merge modality_patterns_2 into sf_patterns so SF matcher catches them
+# sf_patterns.update(expand_patterns(modality_patterns_2))
+
 if __name__ == "__main__":
     from pprint import pprint
-    import pandas as pd
 
-    pd.DataFrame.from_dict(
-        {
-            sf_name: {
-                "大分類": d["category"][0],
-                "細分類": d["category"][1],
-                "例文": " | ".join(d["examples"]),
-            }
-            for sf_name, d in sf_definitions.items()
-        },
-        orient="index",
-    ).to_excel("sf_patterns.xlsx")
-    pd.DataFrame.from_dict(
-        {
-            sf_name: {
-                "大分類": d["category"][0],
-                "細分類": d["category"][1],
-                "例文": " | ".join(d["examples"]),
-            }
-            for sf_name, d in sf_definitions.items()
-        },
-        orient="index",
-    ).to_csv("sf_patterns.csv")
+    import polars as pl
 
-    pprint(modality_patterns)
+    # Build a table of SF‐definitions and write via Polars
+    records = [
+        {
+            "pattern": sf_name,
+            "大分類": d["category"][0],
+            "細分類": d["category"][1],
+            "例文": " | ".join(d["examples"]),
+        }
+        for sf_name, d in sf_definitions.items()
+    ]
+    df = pl.DataFrame(records)
+    # Excel may not be supported in all envs—skip on error
+    try:
+        df.write_excel("sf_patterns.xlsx")
+    except Exception:
+        pass
+    df.write_csv("sf_patterns.csv")
+
+    # Dump our DSL data for inspection
+    # pprint(modality_patterns)
     pprint(modality_patterns_2)
     pprint(sf_patterns)
-    pprint(connectives_patterns)
-    pprint(connectives_regexes)
-    pprint(connectives_classifications)
+    # pprint(connectives_patterns)
+    # pprint(connectives_regexes)
+    # pprint(connectives_classifications)

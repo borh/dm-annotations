@@ -1,7 +1,7 @@
 from logging import warn
 from pathlib import Path
 
-from dm_annotations.annotation_loader import read_annotations_excel
+from dm_annotations.annotation.annotation_loader import read_annotations_excel
 
 
 def test_read_annotations_excel(model):

@@ -1,4 +1,4 @@
-from dm_annotations.analysis import create_segments
+from dm_annotations.analysis.analysis import create_segments
 
 
 def test_create_segments(nlp, doc):

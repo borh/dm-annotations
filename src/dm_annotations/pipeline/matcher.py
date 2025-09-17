@@ -1,28 +1,18 @@
 import re
-from typing import Any, Iterator
-from spacy.tokens import Doc, Span
-from spacy.matcher import Matcher
+from typing import Any
+
 from spacy.language import Language
+from spacy.matcher import Matcher
+from spacy.tokens import Doc, Span
 from spacy.util import filter_spans
-from .patterns import (
-    modality_patterns,
-    sf_patterns,
+
+from dm_annotations.pipeline.patterns import (
     connectives_patterns,
     connectives_regexes,
-    connectives_classifications,
+    modality_patterns,
+    sf_patterns,
     termpp,
 )
-
-
-def get_connectives_classification(s: Span) -> str:
-    return connectives_classifications.get(s.label_, "新")
-
-
-if not Span.has_extension("connective"):
-    Span.set_extension("connective", getter=get_connectives_classification)
-
-if not Span.has_extension("modality"):
-    Span.set_extension("modality", default=None)
 
 
 def create_matcher(
@@ -59,6 +49,10 @@ def create_modality_matcher(nlp: Language) -> tuple[Language, Matcher]:
 
 
 def create_sf_matcher(nlp: Language) -> tuple[Language, Matcher]:
+    # TODO 文の最後から名詞までヒットしたパターンでフィルター
+    # - 「こと」,「もの」の後を全部抽出してみる？
+    #   - 最後の7形態素
+    # What to do about gaps? (Ignore??)
     return create_matcher(sf_patterns, nlp)
 
 
@@ -87,47 +81,61 @@ def pattern_match(doc: Doc, nlp: Language, matcher: Matcher) -> list[Span]:
         Span(doc, start, end, nlp.vocab.strings[match_id])
         for match_id, start, end in matches
     ]
-    # TODO smarter filter
+    # Always filter overlaps so that shorter matches (like "のか") are dropped when inside longer matches
     spans = filter_spans(spans)
     return spans
 
 
 def connectives_match(
-    doc: Doc, nlp: Language, connectives_matcher: Matcher
+    doc: Doc,
+    nlp: Language,
+    connectives_matcher: Matcher,
+    strict: bool = True,
 ) -> list[Span]:
-    # TODO match all, but keep index of match for later filtering?
+    # The doc is assumed to be a single sentence/unit.
+    spans: list[Span] = []
+
+    # Determine the start index of the first non-punct/space token.
+    first_idx = 0
+    try:
+        sent = next(doc.sents)
+        for tok in sent:
+            if not (tok.is_punct or tok.is_space):
+                first_idx = tok.i
+                break
+        else:
+            first_idx = sent.start
+    except StopIteration:
+        # No sentences found, use doc start.
+        pass
+
+    # 1. Matcher-based patterns
     matches = connectives_matcher(doc)
-    spans = [
-        Span(doc, start, end, nlp.vocab.strings[match_id])
-        for match_id, start, end in matches
-        if start < 8  # FIXME only look at first 8 tokens
-    ]
-    for sentence in doc.sents:
-        # We need to index back into the doc after matching with the re module.
-        char_offset = sentence.start_char
+    for match_id, start, end in matches:
+        # Only accept matches that begin at the first real token.
+        if start == first_idx:
+            if not strict or (end < len(doc) and doc[end].text in {",", "、", "，"}):
+                spans.append(Span(doc, start, end, nlp.vocab.strings[match_id]))
 
-        for connective in connectives_regexes:
-            # Exceptions:
-            # TODO move to patterns definition
-            # NOTE this will not annotate correctly
-            if connective["regex"] == "が":
-                rx = re.compile(r"^(" + connective["regex"] + r")[、,，]")
-            else:
-                rx = re.compile(connective["regex"])
-            # The first matching group (m.group(1)) contains the actual tokens we want
-            # to label.
-            # rx = re.compile(r"^[\s　\d０-９]*「?(" + connective["regex"] + r")[、,，]")
+    # 2. Regex-based patterns (anchored to the start of the doc text)
+    for connective in connectives_regexes:
+        rx = re.compile(r"^[\s　\d０-９]*「?(" + connective["regex"] + r")[、,，]")
+        if m := re.search(rx, doc.text):
+            match_span = doc.char_span(
+                m.start(),
+                m.end(),
+                label=termpp(connective["conjunction"]),
+                alignment_mode="contract",
+            )
+            if match_span:
+                spans.append(match_span)
 
-            if m := re.search(rx, sentence.text):
-                if char_offset + m.start() > 12:  # FIXME only look at first 12 chars
-                    continue
-                match_span = doc.char_span(
-                    char_offset + m.start(),
-                    char_offset + m.end(),
-                    label=termpp(connective["conjunction"]),
-                    alignment_mode="contract",  # "expand",
-                )
-                if match_span:  # If contracted can be None
-                    spans.append(match_span)
-    spans = filter_spans(spans)
-    return spans
+    if not spans:
+        return []
+
+    # Find the single best connective span: earliest start, then longest.
+    best_span = sorted(
+        spans, key=lambda s: (s.start_char, -(s.end_char - s.start_char))
+    )[0]
+
+    return [best_span]

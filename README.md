@@ -16,6 +16,14 @@ poetry install dm-annotations
 
 ## Usage
 
+> **Important:**  
+> Before adding the `"dm_extractor"` component to your spaCy pipeline, you must call:
+> ```python
+> from dm_annotations import register_dm_extractor
+> register_dm_extractor()
+> ```
+> This ensures the component’s factory is registered with spaCy.
+
 ### Extract DMs from corpus
 
 ```bash

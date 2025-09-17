@@ -1,13 +1,17 @@
 from pathlib import Path
-from logging import warn
+
 import spacy
-from dm_annotations.corpus import parse_or_get_docs, extract_dm
+
+from dm_annotations.io.corpus import parse_or_get_docs
 
 
 def test_parse_or_get_docs(model):
     path = Path("resources/test.jsonl")
-    nlp = spacy.load(model)
-    docs = parse_or_get_docs(path, nlp, batch_size=1)
+    spacy.prefer_gpu()
+    nlp = spacy.load(model, disable=["ner"])
+    # register our DM‐extractor pipe
+    nlp.add_pipe("dm_extractor", last=True)
+    docs = list(parse_or_get_docs(path, nlp, batch_size=1))
     assert docs
 
     assert_docs = list(
@@ -25,6 +29,6 @@ def test_parse_or_get_docs(model):
     docs = list(parse_or_get_docs(path, nlp, batch_size=1))
     assert [doc.text for doc in docs] == [doc.text for doc in assert_docs]
 
-    dms = list(extract_dm(docs, nlp))
-    print(docs, dms)
-    assert len(list(matches for matches in dms if matches)) > 0
+    # flatten all doc._.dm_matches
+    dms = [m for doc in docs for m in doc._.dm_matches]
+    assert dms, "expected at least one DM match"

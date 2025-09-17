@@ -1,12 +1,12 @@
 from itertools import permutations
 
-from ginza import force_using_normalized_form_as_lemma
-from pyrsistent import m, pvector, s, thaw, v
 import pytest
 import spacy
+from pyrsistent import m, pvector, s, thaw, v
 from spacy.matcher import Matcher
 
-from dm_annotations.patterns import (
+from dm_annotations.pipeline.matcher import create_connectives_matcher, filter_overlaps
+from dm_annotations.pipeline.patterns import (
     connectives_patterns,
     connectives_regexes,
     modality_patterns,
@@ -16,7 +16,6 @@ from dm_annotations.patterns import (
     sf_patterns,
     split_defs,
 )
-from dm_annotations.matcher import filter_overlaps
 
 # force_using_normalized_form_as_lemma(True)
 
@@ -62,6 +61,17 @@ def test_classifications():
         "そのあと、そのご",
         "その後",
     }
+
+
+def test_strict_extraction(nlp):
+    should_not_match_doc = nlp(
+        "私は現実を見つめそれを言葉に置き換えません―それは単なる翻訳でしょう―、そうではなく、言葉を見つめ、言葉の中に現実と今という時を認めるのです。\n　最後、若い男が…"
+    )
+    # assert len(list(should_not_match_doc.sents)) == 2
+    nlp, matcher = create_connectives_matcher(nlp=nlp)
+    matches = matcher(should_not_match_doc)
+    print(matches)
+    assert not matches
 
 
 def pattern_is_equal(a, b):
@@ -151,7 +161,7 @@ def test_sf_patterns(nlp):
     # 再分類
     assert len(set(p["category"][1] for _, p in sf_definitions.items())) == 40
     # パターン数
-    assert len(sf_definitions) == 105
+    assert len(sf_definitions) == 110
 
     matcher = Matcher(nlp.vocab, validate=True)
     for pattern_name, d in sf_patterns.items():
@@ -187,9 +197,19 @@ def test_sf_patterns(nlp):
                 pattern_name,
                 [nlp.vocab.strings[match_id] for match_id, _, _ in matches],
             )
-            assert doc and matches
-            assert doc and any(
-                nlp.vocab.strings[match_id] == pattern_name
-                for match_id, _, _ in matches
+            if not matches:
+                pytest.fail(f"No matches found for example: {example}")
+
+            if len(matches) > 1:
+                import warnings
+
+                warnings.warn(
+                    f"Multiple matches ({len(matches)}) found for example '{example}': "
+                    f"{[(m[1], m[2], doc[m[1] : m[2]]) for m in matches]}"
+                )
+
+            # Check last match's label
+            last_label = nlp.vocab.strings[matches[-1][0]]
+            assert last_label == pattern_name, (
+                f"Last match '{last_label}' does not match expected pattern '{pattern_name}'"
             )
-            assert doc and len(matches) == 1  # This is the only match.

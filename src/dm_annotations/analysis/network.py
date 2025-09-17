@@ -1,16 +1,15 @@
 from itertools import groupby
-from math import log10, log2
-import scipy.stats
+from math import log2, log10
 from operator import itemgetter
 from pathlib import Path
-from typing import Iterator
+from typing import Any
 
-from community import community_louvain
-from matplotlib import rcParams
 import matplotlib.pyplot as plt
-from netgraph import Graph
 import networkx as nx
-from spacy.tokens import Span
+import polars as pl
+from community import community_louvain  # type: ignore[import]
+from matplotlib import rcParams
+from netgraph import Graph  # type: ignore[import]
 
 rcParams["font.family"] = "sans-serif"
 rcParams["font.sans-serif"] = ["IBM Plex Sans JP"]
@@ -79,9 +78,46 @@ def filter_graph_by_pmi_entropy_and_frequency(G, min_pmi, min_entropy, min_freq)
         G.remove_node(node)
 
 
-def dms_to_network(dm_seq, min_pmi=0, min_entropy=0, min_freq=0):
-    G = nx.DiGraph()
-    sorted_dm_seq = sorted(dm_seq, key=itemgetter("sentence_id", "ジャンル", "title"))
+def dms_to_network(
+    dm_seq: list[dict[str, Any]],
+    min_pmi: float = 0.0,
+    min_entropy: float = 0.0,
+    min_freq: int = 0,
+) -> nx.DiGraph:
+    """
+    Build a directed graph from a flat sequence of DM‐match dicts.
+
+    Nodes are expressions, edges connect consecutive matches in each sentence.
+    PMI, entropy, and frequency are computed on the fly.
+
+    :param dm_seq: list of dicts with keys "sentence_id","ジャンル","title","表現","タイプ"
+    :param min_pmi: drop edges with PMI < threshold
+    :param min_entropy: drop nodes with entropy < threshold
+    :param min_freq: drop nodes with frequency < threshold
+    :return: filtered `networkx.DiGraph`
+
+    >>> dms = [
+    ...   {"sentence_id":0,"ジャンル":"G","title":"T","表現":"A","タイプ":"t"},
+    ...   {"sentence_id":0,"ジャンル":"G","title":"T","表現":"B","タイプ":"t"},
+    ... ]
+    >>> G = dms_to_network(dms)
+    >>> G.has_edge("A","B")
+    True
+    """
+    G: nx.DiGraph = nx.DiGraph()
+    # Pull the sequence into a list so we can loop twice (nodes + sorted for edges)
+    dm_records = list(dm_seq)
+    # Ensure every DM expression shows up as a node, even if no edges form
+    for rec in dm_records:
+        expr = rec["表現"]
+        typ = rec.get("タイプ", "")
+        if expr not in G:
+            G.add_node(expr, type=typ, entropy=0.0, frequency=1)
+        else:
+            G.nodes[expr]["frequency"] += 1
+    sorted_dm_seq = sorted(
+        dm_records, key=itemgetter("sentence_id", "ジャンル", "title")
+    )
     for _, sentence_group in groupby(
         sorted_dm_seq, key=itemgetter("sentence_id", "ジャンル", "title")
     ):
@@ -235,10 +271,10 @@ def visualize(
 
 
 if __name__ == "__main__":
-    import pandas as pd
+    import polars as pl
 
-    df = pd.read_csv("learner-dms.csv")
-    G = dms_to_network(df.to_dict(orient="records"))
+    df = pl.read_csv("learner-dms.csv")
+    G = dms_to_network(df.to_dicts())
     export_network(G, filename="learner-dms.net")
 
     visualize(
@@ -251,8 +287,8 @@ if __name__ == "__main__":
         filename="learner-dms",
     )
 
-    df = pd.read_csv("science-dms.csv")
-    G = dms_to_network(df.to_dict(orient="records"))
+    df = pl.read_csv("science-dms.csv")
+    G = dms_to_network(df.to_dicts())
     export_network(G, filename="science-dms.net")
 
     visualize(
